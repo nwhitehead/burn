@@ -130,16 +130,18 @@ impl<B: Backend> Gru<B> {
             let input_t = input_t.squeeze(1);
             let hidden_t = hidden_t.squeeze(1);
             // u(pdate)g(ate) tensors
-            let biased_ug_input_sum = self.gate_product(&input_t, &hidden_t, &self.update_gate);
+            let biased_ug_input_sum =
+                self.gate_product(&input_t, &hidden_t, None, &self.update_gate);
             let update_values = activation::sigmoid(biased_ug_input_sum); // Colloquially referred to as z(t)
 
             // r(eset)g(ate) tensors
-            let biased_rg_input_sum = self.gate_product(&input_t, &hidden_t, &self.reset_gate);
+            let biased_rg_input_sum =
+                self.gate_product(&input_t, &hidden_t, None, &self.reset_gate);
             let reset_values = activation::sigmoid(biased_rg_input_sum); // Colloquially referred to as r(t)
-            let reset_t = hidden_t.clone().mul(reset_values); // Passed as input to new_gate
 
             // n(ew)g(ate) tensor
-            let biased_ng_input_sum = self.gate_product(&input_t, &reset_t, &self.new_gate);
+            let biased_ng_input_sum =
+                self.gate_product(&input_t, &hidden_t, Some(&reset_values), &self.new_gate);
             let candidate_state = biased_ng_input_sum.tanh(); // Colloquially referred to as g(t)
 
             // calculate linear interpolation between previous hidden state and candidate state:
@@ -162,18 +164,20 @@ impl<B: Backend> Gru<B> {
     }
 
     /// Helper function for performing weighted matrix product for a gate and adds
-    /// bias, if any.
+    /// bias, if any, and optionally applies reset to hidden state.
     ///
-    ///  Mathematically, performs `Wx*X + Wh*H + b`, where:
+    ///  Mathematically, performs `Wx*X + r .* (Wh*H + b)`, where:
     ///     Wx = weight matrix for the connection to input vector X
     ///     Wh = weight matrix for the connection to hidden state H
     ///     X = input vector
     ///     H = hidden state
     ///     b = bias terms
+    ///     r = reset state
     fn gate_product(
         &self,
         input: &Tensor<B, 2>,
         hidden: &Tensor<B, 2>,
+        reset: Option<&Tensor<B, 2>>,
         gate: &GateController<B>,
     ) -> Tensor<B, 2> {
         let input_product = input.clone().matmul(gate.input_transform.weight.val());
@@ -190,13 +194,29 @@ impl<B: Backend> Gru<B> {
             .as_ref()
             .map(|bias_param| bias_param.val());
 
-        match (input_bias, hidden_bias) {
-            (Some(input_bias), Some(hidden_bias)) => {
+        match (input_bias, hidden_bias, reset) {
+            (Some(input_bias), Some(hidden_bias), Some(r)) => {
+                input_product
+                    + input_bias.unsqueeze()
+                    + r.clone().mul(hidden_product + hidden_bias.unsqueeze())
+            }
+            (Some(input_bias), Some(hidden_bias), None) => {
                 input_product + input_bias.unsqueeze() + hidden_product + hidden_bias.unsqueeze()
             }
-            (Some(input_bias), None) => input_product + input_bias.unsqueeze() + hidden_product,
-            (None, Some(hidden_bias)) => input_product + hidden_product + hidden_bias.unsqueeze(),
-            (None, None) => input_product + hidden_product,
+            (Some(input_bias), None, Some(r)) => {
+                input_product + input_bias.unsqueeze() + r.clone().mul(hidden_product)
+            }
+            (Some(input_bias), None, None) => {
+                input_product + input_bias.unsqueeze() + hidden_product
+            }
+            (None, Some(hidden_bias), Some(r)) => {
+                input_product + r.clone().mul(hidden_product + hidden_bias.unsqueeze())
+            }
+            (None, Some(hidden_bias), None) => {
+                input_product + hidden_product + hidden_bias.unsqueeze()
+            }
+            (None, None, Some(r)) => input_product + r.clone().mul(hidden_product),
+            (None, None, None) => input_product + hidden_product,
         }
     }
 }
