@@ -129,9 +129,17 @@ impl<B: Backend> Gru<B> {
         {
             let input_t = input_t.squeeze(1);
             let hidden_t = hidden_t.squeeze(1);
+            let hidden_t = if t > 0 {
+                hidden_state.clone().slice([0..batch_size, (t - 1)..t, 0..self.d_hidden]).squeeze(1)
+            } else {
+                hidden_t
+            };
+//            println!("Starting t={:} hidden={:} hidden_state={:}", t, hidden_t.clone(), hidden_state.clone());
             // u(pdate)g(ate) tensors
             let biased_ug_input_sum = self.gate_product(&input_t, &hidden_t, None, &self.update_gate);
+//            println!("z_{:} presigmoid = {:?}", t, biased_ug_input_sum.clone());
             let update_values = activation::sigmoid(biased_ug_input_sum); // Colloquially referred to as z(t)
+//            println!("z_t = {:?}", update_values.clone());
 
             // r(eset)g(ate) tensors
             let biased_rg_input_sum = self.gate_product(&input_t, &hidden_t, None, &self.reset_gate);
@@ -151,6 +159,7 @@ impl<B: Backend> Gru<B> {
             let current_shape = state_vector.shape().dims;
             let unsqueezed_shape = [current_shape[0], 1, current_shape[1]];
             let reshaped_state_vector = state_vector.reshape(unsqueezed_shape);
+//            println!("Trying to update state to {:}", reshaped_state_vector.clone());
             hidden_state = hidden_state.slice_assign(
                 [0..batch_size, t..(t + 1), 0..self.d_hidden],
                 reshaped_state_vector,
@@ -196,6 +205,9 @@ impl<B: Backend> Gru<B> {
                 input_product + input_bias.unsqueeze() + r.clone().mul(hidden_product + hidden_bias.unsqueeze())
             }
             (Some(input_bias), Some(hidden_bias), None) => {
+//                println!("gate_product = {:?}  +  {:?}", input_product.clone() + input_bias.clone().unsqueeze(), hidden_product.clone() + hidden_bias.clone().unsqueeze());
+//                println!("gate_product RHS = {:?}  +  {:?}", hidden_product.clone(), hidden_bias.clone());
+//                println!("gate_product hidden_product = {:?}  @  {:?}", hidden.clone(), gate.hidden_transform.weight.val().clone());
                 input_product + input_bias.unsqueeze() + hidden_product + hidden_bias.unsqueeze()
             }
             (Some(input_bias), None, Some(r)) => input_product + input_bias.unsqueeze() + r.clone().mul(hidden_product),
